@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full bg-slate-900 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Gestor de Clientes y Rutas</title>
+    <!-- Tailwind CSS para diseño moderno -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome para iconos -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Leaflet CSS para Mapas Interactivos -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4',
+                            100: '#dcfce7',
+                            500: '#22c55e',
+                            600: '#16a34a',
+                            700: '#15803d',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Desplazamiento suave y ajuste nativo de app */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        .pb-safe {
+            padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+        }
+        /* Custom scrollbars */
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 4px;
+        }
+        #map {
+            z-index: 1;
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col bg-slate-950 text-slate-100 select-none overflow-x-hidden">
+
+    <!-- Encabezado Móvil -->
+    <header class="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-30 shadow-md flex justify-between items-center">
+        <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-brand-600/30">
+                <i class="fa-solid fa-map-location-dot"></i>
+            </div>
+            <div>
+                <h1 class="font-bold text-lg leading-tight text-white">RutaClientes</h1>
+                <p class="text-xs text-slate-400 flex items-center gap-1">
+                    <span id="sync-status" class="inline-block w-2 h-2 rounded-full bg-amber-400"></span>
+                    <span id="sync-text">Conectando...</span>
+                </p>
+            </div>
+        </div>
+
+        <button id="btn-add-quick" onclick="openClientModal()" class="bg-brand-600 hover:bg-brand-500 active:scale-95 transition-all text-white px-3.5 py-2 rounded-xl text-sm font-semibold flex items-center gap-2 shadow-lg shadow-brand-600/20">
+            <i class="fa-solid fa-plus text-xs"></i>
+            <span class="hidden sm:inline">Nuevo</span>
+        </button>
+    </header>
+
+    <main class="flex-1 overflow-y-auto pb-safe">
+        
+        <!-- VISTA 1: Lista de Clientes -->
+        <section id="view-clients" class="p-4 space-y-4 max-w-2xl mx-auto">
+            <!-- Barra de búsqueda y selección -->
+            <div class="flex flex-col gap-2">
+                <div class="relative">
+                    <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                    <input type="text" id="search-input" oninput="renderClients()" placeholder="Buscar por nombre, teléfono o dirección..." class="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-10 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition-colors shadow-inner">
+                    <button onclick="clearSearch()" id="btn-clear-search" class="hidden absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1">
+                        <i class="fa-solid fa-circle-xmark"></i>
+                    </button>
+                </div>
+                <div class="flex justify-between items-center text-xs text-slate-400 px-1 pt-1">
+                    <span id="client-count">Cargando clientes...</span>
+                    <button id="btn-toggle-multi" onclick="toggleMultiSelectMode()" class="text-brand-500 hover:text-brand-400 font-medium flex items-center gap-1 py-1">
+                        <i class="fa-solid fa-route"></i>
+                        <span id="multi-text">Armar Ruta de Grupo</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Panel de Generación de Ruta Multiple (Oculto por defecto) -->
+            <div id="multi-route-bar" class="hidden bg-slate-900 border border-brand-500/30 p-3.5 rounded-2xl flex items-center justify-between shadow-xl animate-fade-in">
+                <div class="flex items-center gap-3">
+                    <span id="selected-count-badge" class="w-7 h-7 rounded-full bg-brand-600 text-white font-bold text-xs flex items-center justify-center">0</span>
+                    <span class="text-xs text-slate-300 font-medium">Clientes seleccionados</span>
+                </div>
+                <div class="flex gap-2">
+                    <button onclick="clearSelection()" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700">Limpiar</button>
+                    <button onclick="openMultiRouteInGoogleMaps()" class="px-3.5 py-1.5 rounded-lg text-xs bg-brand-600 text-white font-bold flex items-center gap-1.5 shadow-md shadow-brand-600/30">
+                        <i class="fa-solid fa-location-arrow"></i>
+                        Ver Ruta
+                    </button>
+                </div>
+            </div>
+
+            <!-- Lista de Tarjetas de Clientes -->
+            <div id="clients-container" class="space-y-3">
+                <!-- Se llena dinámicamente con JS -->
+            </div>
+        </section>
+
+        <!-- VISTA 2: Mapa -->
+        <section id="view-map" class="hidden h-full w-full relative flex flex-col min-h-[calc(100vh-8rem)]">
+            <div id="map" class="w-full flex-1 bg-slate-800"></div>
+            <div class="absolute top-4 right-4 z-[1000] bg-slate-900/90 backdrop-blur border border-slate-700 rounded-xl p-2 text-xs text-slate-300 shadow-xl max-w-[200px]">
+                <p class="font-medium flex items-center gap-1.5 mb-1"><i class="fa-solid fa-circle-info text-brand-500"></i> Tip Mapa:</p>
+                <p class="text-[11px] text-slate-400">Toca un pin verde para ver las acciones rápidas o abrir la ruta en Google Maps.</p>
+            </div>
+        </section>
+    </main>
+
+    <!-- Navegación Inferior Móvil -->
+    <nav class="bg-slate-900/95 backdrop-blur-md border-t border-slate-800 fixed bottom-0 left-0 right-0 z-30 flex justify-around items-center p-2">
+        <button onclick="switchTab('clients')" id="tab-clients" class="flex flex-col items-center justify-center py-1.5 px-4 rounded-xl text-brand-500 font-semibold transition-all">
+            <i class="fa-solid fa-users text-lg mb-0.5"></i>
+            <span class="text-[11px]">Clientes</span>
+        </button>
+        <button onclick="switchTab('map')" id="tab-map" class="flex flex-col items-center justify-center py-1.5 px-4 rounded-xl text-slate-400 hover:text-slate-200 transition-all">
+            <i class="fa-solid fa-map-marked-alt text-lg mb-0.5"></i>
+            <span class="text-[11px]">Mapa</span>
+        </button>
+        <button onclick="openClientModal()" class="flex flex-col items-center justify-center py-1.5 px-4 rounded-xl text-slate-400 hover:text-slate-200 transition-all">
+            <i class="fa-solid fa-user-plus text-lg mb-0.5"></i>
+            <span class="text-[11px]">Agregar</span>
+        </button>
+    </nav>
+
+    <!-- MODAL: Crear/Editar Cliente -->
+    <div id="client-modal" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div class="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-t-3xl sm:rounded-2xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
+            <div class="p-4 border-b border-slate-800 flex justify-between items-center sticky top-0 bg-slate-900 z-10">
+                <h2 id="modal-title" class="font-bold text-base text-white flex items-center gap-2">
+                    <i class="fa-solid fa-user-pen text-brand-500"></i>
+                    Nuevo Cliente
+                </h2>
+                <button onclick="closeClientModal()" class="w-8 h-8 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <form id="client-form" onsubmit="saveClient(event)" class="p-4 space-y-4">
+                <input type="hidden" id="client-id">
+
+                <!-- Nombre -->
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 mb-1">Nombre Completo *</label>
+                    <input type="text" id="field-name" required placeholder="Ej: Juan Pérez" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-brand-500">
+                </div>
+
+                <!-- Teléfono -->
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 mb-1">Teléfono Móvil *</label>
+                    <input type="tel" id="field-phone" required placeholder="Ej: +573001234567" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-brand-500">
+                </div>
+
+                <!-- Dirección escrita -->
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 mb-1">Dirección / Referencia *</label>
+                    <input type="text" id="field-address" required placeholder="Ej: Calle 10 #45-20, Barrio Centro" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-brand-500">
+                </div>
+
+                <!-- Coordenadas Geográficas -->
+                <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                    <div class="flex justify-between items-center">
+                        <label class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                            <i class="fa-solid fa-location-dot text-brand-500"></i> Coordenadas GPS (Opcional)
+                        </label>
+                        <button type="button" onclick="getCurrentLocation()" class="text-xs text-brand-500 hover:underline flex items-center gap-1">
+                            <i class="fa-solid fa-crosshairs"></i> Usar mi ubicación actual
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <input type="number" step="any" id="field-lat" placeholder="Latitud" class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200">
+                        <input type="number" step="any" id="field-lng" placeholder="Longitud" class="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200">
+                    </div>
+                    <p class="text-[11px] text-slate-500">Si no ingresas coordenadas, Google Maps buscará la dirección escrita directamente.</p>
+                </div>
+
+                <!-- Observaciones -->
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 mb-1">Notas u Observaciones</label>
+                    <textarea id="field-notes" rows="3" placeholder="Ej: Atiende en las tardes. Entregar factura original." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-brand-500"></textarea>
+                </div>
+
+                <!-- Botones de Acción -->
+                <div class="pt-2 flex gap-3">
+                    <button type="button" onclick="closeClientModal()" class="w-1/3 py-3 rounded-xl bg-slate-800 text-slate-300 font-semibold text-sm hover:bg-slate-700">Cancelar</button>
+                    <button type="submit" id="btn-save" class="w-2/3 py-3 rounded-xl bg-brand-600 text-white font-bold text-sm hover:bg-brand-500 shadow-lg shadow-brand-600/30 flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-floppy-disk"></i> Guardar Cliente
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: Mensaje personalizado (Reemplazo de alert) -->
+    <div id="toast" class="hidden fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-slate-800 text-white border border-slate-700 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 max-w-xs transition-all">
+        <i id="toast-icon" class="fa-solid fa-circle-check text-brand-500"></i>
+        <span id="toast-msg" class="text-xs font-medium"></span>
+    </div>
+
+    <!-- Módulos de Firebase -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Configuración de la aplicación
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'mi-gestor-de-clientes';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : {
+                // Fallback de demostración
+                apiKey: "demo-key",
+                authDomain: "demo.firebaseapp.com",
+                projectId: "demo-project",
+                storageBucket: "demo.appspot.com",
+                messagingSenderId: "123456789",
+                appId: "1:123456789:web:demo"
+            };
+
+        // Inicializar Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Variables globales del estado
+        window.clientsData = [];
+        window.selectedClientIds = new Set();
+        window.isMultiSelectMode = false;
+        window.activeTab = 'clients';
+        let currentUser = null;
+        let leafletMap = null;
+        let mapMarkers = [];
+
+        // Autenticación Automática
+        async function initAuth() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.error("Error al autenticar:", err);
+                showToast("Modo sin conexión temporal", "fa-triangle-exclamation text-amber-500");
+            }
+        }
+
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            const syncStatus = document.getElementById('sync-status');
+            const syncText = document.getElementById('sync-text');
+
+            if (user) {
+                syncStatus.className = "inline-block w-2 h-2 rounded-full bg-brand-500";
+                syncText.innerText = "Base de Datos Conectada";
+                listenToClients();
+            } else {
+                syncStatus.className = "inline-block w-2 h-2 rounded-full bg-rose-500";
+                syncText.innerText = "Desconectado";
+            }
+        });
+
+        // Escuchar datos de clientes en Firestore (Nube permanente)
+        function listenToClients() {
+            if (!currentUser) return;
+
+            // RUTA OBLIGATORIA DE SEGURIDAD (Regla de Firestore)
+            const clientsCollection = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'clients');
+
+            onSnapshot(clientsCollection, (snapshot) => {
+                window.clientsData = [];
+                snapshot.forEach((doc) => {
+                    window.clientsData.push({ id: doc.id, ...doc.data() });
+                });
+
+                // Ordenar alfabéticamente por nombre
+                window.clientsData.sort((a, b) => a.name.localeCompare(b.name));
+
+                renderClients();
+                if (window.activeTab === 'map') {
+                    updateMapMarkers();
+                }
+            }, (error) => {
+                console.error("Error Firestore:", error);
+                showToast("Error de sincronización de datos", "fa-circle-xmark text-rose-500");
+            });
+        }
+
+        // Guardar o Actualizar Cliente
+        window.saveClient = async function (e) {
+            e.preventDefault();
+            if (!currentUser) {
+                showToast("Conectando con el servidor, reintenta en un momento.", "fa-info-circle");
+                return;
+            }
+
+            const id = document.getElementById('client-id').value || crypto.randomUUID();
+            const name = document.getElementById('field-name').value.trim();
+            const phone = document.getElementById('field-phone').value.trim();
+            const address = document.getElementById('field-address').value.trim();
+            const lat = document.getElementById('field-lat').value ? parseFloat(document.getElementById('field-lat').value) : null;
+            const lng = document.getElementById('field-lng').value ? parseFloat(document.getElementById('field-lng').value) : null;
+            const notes = document.getElementById('field-notes').value.trim();
+
+            const clientPayload = {
+                name,
+                phone,
+                address,
+                lat,
+                lng,
+                notes,
+                updatedAt: new Date().toISOString()
+            };
+
+            const btnSave = document.getElementById('btn-save');
+            btnSave.disabled = true;
+            btnSave.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Guardando...`;
+
+            try {
+                const clientDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'clients', id);
+                await setDoc(clientDocRef, clientPayload, { merge: true });
+                closeClientModal();
+                showToast("Cliente guardado correctamente en la nube", "fa-circle-check text-brand-500");
+            } catch (err) {
+                console.error("Error guardando cliente:", err);
+                showToast("No se pudo guardar el cliente", "fa-triangle-exclamation text-rose-500");
+            } finally {
+                btnSave.disabled = false;
+                btnSave.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> Guardar Cliente`;
+            }
+        };
+
+        // Eliminar Cliente
+        window.deleteClient = async function (id, name) {
+            if (!currentUser) return;
+            
+            // Modal simple de confirmación estilo app
+            if (confirm(`¿Estás seguro de que deseas eliminar a "${name}"?`)) {
+                try {
+                    const clientDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'clients', id);
+                    await deleteDoc(clientDocRef);
+                    showToast("Cliente eliminado", "fa-trash text-amber-500");
+                } catch (err) {
+                    console.error("Error al eliminar cliente:", err);
+                    showToast("Error al borrar cliente", "fa-xmark text-rose-500");
+                }
+            }
+        };
+
+        // Renderizar la Lista de Clientes
+        window.renderClients = function () {
+            const container = document.getElementById('clients-container');
+            const searchVal = document.getElementById('search-input').value.toLowerCase().trim();
+            const countElem = document.getElementById('client-count');
+            const clearBtn = document.getElementById('btn-clear-search');
+
+            clearBtn.classList.toggle('hidden', searchVal === '');
+
+            const filtered = window.clientsData.filter(c => 
+                c.name.toLowerCase().includes(searchVal) || 
+                c.phone.includes(searchVal) || 
+                c.address.toLowerCase().includes(searchVal)
+            );
+
+            countElem.innerText = `${filtered.length} de ${window.clientsData.length} clientes`;
+
+            if (filtered.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-12 px-4 bg-slate-900/50 rounded-2xl border border-slate-800">
+                        <i class="fa-solid fa-users-slash text-4xl text-slate-600 mb-3"></i>
+                        <h3 class="text-slate-300 font-semibold mb-1">No hay clientes encontrados</h3>
+                        <p class="text-xs text-slate-500 max-w-xs mx-auto mb-4">No se encontraron registros que coincidan con tu búsqueda.</p>
+                        <button onclick="openClientModal()" class="px-4 py-2 bg-brand-600 text-white rounded-xl text-xs font-bold shadow-lg">Registrar Primer Cliente</button>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = filtered.map(c => {
+                const isSelected = window.selectedClientIds.has(c.id);
+
+                return `
+                <div class="bg-slate-900 border ${isSelected ? 'border-brand-500 bg-brand-950/20' : 'border-slate-800'} rounded-2xl p-4 transition-all duration-200 shadow-sm relative hover:border-slate-700">
+                    <div class="flex items-start justify-between gap-3">
+                        ${window.isMultiSelectMode ? `
+                            <div class="pt-1">
+                                <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleSelectClient('${c.id}')" class="w-5 h-5 accent-brand-500 rounded cursor-pointer">
+                            </div>
+                        ` : ''}
+                        
+                        <div class="flex-1 min-w-0" onclick="${window.isMultiSelectMode ? `toggleSelectClient('${c.id}')` : ''}">
+                            <h3 class="font-bold text-slate-100 text-base truncate flex items-center gap-2">
+                                ${c.name}
+                            </h3>
+                            
+                            <p class="text-xs text-slate-400 mt-1 flex items-center gap-2 truncate">
+                                <i class="fa-solid fa-location-dot text-brand-500 text-xs w-3 text-center"></i>
+                                <span class="truncate">${c.address}</span>
+                            </p>
+
+                            <p class="text-xs text-slate-400 mt-1 flex items-center gap-2">
+                                <i class="fa-solid fa-phone text-slate-500 text-xs w-3 text-center"></i>
+                                <span>${c.phone}</span>
+                            </p>
+
+                            ${c.notes ? `
+                                <div class="mt-2 text-xs bg-slate-950/70 text-slate-300 p-2.5 rounded-xl border border-slate-800/80 italic">
+                                    <i class="fa-solid fa-quote-left text-[10px] text-brand-500/50 mr-1"></i>
+                                    ${c.notes}
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+
+                    <!-- Botones de Acción Rápida -->
+                    <div class="mt-3.5 pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                        <div class="flex gap-2">
+                            <!-- Botón Llamar -->
+                            <a href="tel:${c.phone}" class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center gap-1.5 border border-slate-700">
+                                <i class="fa-solid fa-phone text-emerald-400"></i> Llamar
+                            </a>
+                            
+                            <!-- Botón Ruta Individual Google Maps -->
+                            <button onclick="openSingleRoute('${c.address}', ${c.lat}, ${c.lng})" class="px-3 py-1.5 rounded-xl bg-brand-600/20 hover:bg-brand-600/30 text-brand-400 text-xs font-semibold flex items-center gap-1.5 border border-brand-500/30">
+                                <i class="fa-solid fa-diamond-turn-right text-brand-400"></i> Ir en Maps
+                            </button>
+                        </div>
+
+                        <div class="flex gap-1">
+                            <button onclick="editClient('${c.id}')" class="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 text-xs">
+                                <i class="fa-solid fa-pen"></i>
+                            </button>
+                            <button onclick="deleteClient('${c.id}', '${c.name.replace(/'/g, "\\'")}')" class="p-2 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-slate-800 text-xs">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                `;
+            }).join('');
+        };
+
+        // Abrir Ruta para un solo cliente en Google Maps
+        window.openSingleRoute = function(address, lat, lng) {
+            let destination = address;
+            if (lat && lng) {
+                destination = `${lat},${lng}`;
+            }
+            const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}`;
+            window.open(googleMapsUrl, '_blank');
+        };
+
+        // Generar Ruta Mutiple en Google Maps con Waypoints
+        window.openMultiRouteInGoogleMaps = function() {
+            if (window.selectedClientIds.size === 0) {
+                showToast("Selecciona al menos un cliente", "fa-info-circle");
+                return;
+            }
+
+            const selectedList = window.clientsData.filter(c => window.selectedClientIds.has(c.id));
+            if (selectedList.length === 0) return;
+
+            // Tomar el último como destino final y los demás como puntos intermedios
+            const destinationClient = selectedList[selectedList.length - 1];
+            const waypointsClients = selectedList.slice(0, selectedList.length - 1);
+
+            const getLoc = (c) => (c.lat && c.lng) ? `${c.lat},${c.lng}` : c.address;
+
+            const destination = encodeURIComponent(getLoc(destinationClient));
+            const waypoints = waypointsClients.map(c => encodeURIComponent(getLoc(c))).join('|');
+
+            let url = `https://www.google.com/maps/dir/?api=1&destination=${destination}`;
+            if (waypoints) {
+                url += `&waypoints=${waypoints}`;
+            }
+
+            window.open(url, '_blank');
+        };
+
+        // Alternar selección de grupo
+        window.toggleMultiSelectMode = function() {
+            window.isMultiSelectMode = !window.isMultiSelectMode;
+            document.getElementById('multi-route-bar').classList.toggle('hidden', !window.isMultiSelectMode);
+            document.getElementById('multi-text').innerText = window.isMultiSelectMode ? "Cancelar Selección" : "Armar Ruta de Grupo";
+            if (!window.isMultiSelectMode) {
+                window.selectedClientIds.clear();
+            }
+            updateSelectedBadge();
+            renderClients();
+        };
+
+        window.toggleSelectClient = function(id) {
+            if (window.selectedClientIds.has(id)) {
+                window.selectedClientIds.delete(id);
+            } else {
+                window.selectedClientIds.add(id);
+            }
+            updateSelectedBadge();
+            renderClients();
+        };
+
+        window.clearSelection = function() {
+            window.selectedClientIds.clear();
+            updateSelectedBadge();
+            renderClients();
+        };
+
+        function updateSelectedBadge() {
+            document.getElementById('selected-count-badge').innerText = window.selectedClientIds.size;
+        }
+
+        // Inicializar Mapa
+        function initMap() {
+            if (leafletMap) return;
+
+            leafletMap = L.map('map').setView([4.6097, -74.0817], 11); // Coordenadas por defecto (ejemplo Bogotá)
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap'
+            }).addTo(leafletMap);
+
+            updateMapMarkers();
+        }
+
+        function updateMapMarkers() {
+            if (!leafletMap) return;
+
+            // Limpiar marcadores existentes
+            mapMarkers.forEach(m => leafletMap.removeLayer(m));
+            mapMarkers = [];
+
+            const bounds = [];
+
+            window.clientsData.forEach(c => {
+                if (c.lat && c.lng) {
+                    const marker = L.marker([c.lat, c.lng]).addTo(leafletMap);
+                    
+                    const popupContent = `
+                        <div class="text-slate-900 p-1 font-sans">
+                            <h4 class="font-bold text-sm">${c.name}</h4>
+                            <p class="text-xs text-slate-600 mb-2">${c.address}</p>
+                            <button onclick="openSingleRoute('${c.address}', ${c.lat}, ${c.lng})" class="w-full py-1.5 bg-green-600 text-white rounded text-xs font-bold">
+                                Ir en Google Maps
+                            </button>
+                        </div>
+                    `;
+                    
+                    marker.bindPopup(popupContent);
+                    mapMarkers.push(marker);
+                    bounds.push([c.lat, c.lng]);
+                }
+            });
+
+            if (bounds.length > 0) {
+                leafletMap.fitBounds(bounds, { padding: [50, 50] });
+            }
+        }
+
+        // Cambio de pestañas
+        window.switchTab = function(tab) {
+            window.activeTab = tab;
+            const viewClients = document.getElementById('view-clients');
+            const viewMap = document.getElementById('view-map');
+            const tabClients = document.getElementById('tab-clients');
+            const tabMap = document.getElementById('tab-map');
+
+            if (tab === 'clients') {
+                viewClients.classList.remove('hidden');
+                viewMap.classList.add('hidden');
+                tabClients.className = "flex flex-col items-center justify-center py-1.5 px-4 rounded-xl text-brand-500 font-semibold transition-all";
+                tabMap.className = "flex flex-col items-center justify-center py-1.5 px-4 rounded-xl text-slate-400 hover:text-slate-200 transition-all";
+            } else {
+                viewClients.classList.add('hidden');
+                viewMap.classList.remove('hidden');
+                tabMap.className = "flex flex-col items-center justify-center py-1.5 px-4 rounded-xl text-brand-500 font-semibold transition-all";
+                tabClients.className = "flex flex-col items-center justify-center py-1.5 px-4 rounded-xl text-slate-400 hover:text-slate-200 transition-all";
+                
+                setTimeout(() => {
+                    initMap();
+                    leafletMap.invalidateSize();
+                    updateMapMarkers();
+                }, 100);
+            }
+        };
+
+        // Modales y Utilidades
+        window.openClientModal = function() {
+            document.getElementById('client-form').reset();
+            document.getElementById('client-id').value = '';
+            document.getElementById('modal-title').innerText = 'Nuevo Cliente';
+            document.getElementById('client-modal').classList.remove('hidden');
+        };
+
+        window.closeClientModal = function() {
+            document.getElementById('client-modal').classList.add('hidden');
+        };
+
+        window.editClient = function(id) {
+            const client = window.clientsData.find(c => c.id === id);
+            if (!client) return;
+
+            document.getElementById('client-id').value = client.id;
+            document.getElementById('field-name').value = client.name || '';
+            document.getElementById('field-phone').value = client.phone || '';
+            document.getElementById('field-address').value = client.address || '';
+            document.getElementById('field-lat').value = client.lat || '';
+            document.getElementById('field-lng').value = client.lng || '';
+            document.getElementById('field-notes').value = client.notes || '';
+
+            document.getElementById('modal-title').innerText = 'Editar Cliente';
+            document.getElementById('client-modal').classList.remove('hidden');
+        };
+
+        window.getCurrentLocation = function() {
+            if (navigator.geolocation) {
+                showToast("Obteniendo GPS...", "fa-satellite-dish");
+                navigator.geolocation.getCurrentPosition((pos) => {
+                    document.getElementById('field-lat').value = pos.coords.latitude.toFixed(6);
+                    document.getElementById('field-lng').value = pos.coords.longitude.toFixed(6);
+                    showToast("Ubicación capturada", "fa-location-crosshairs text-brand-500");
+                }, (err) => {
+                    showToast("No se pudo obtener la ubicación GPS", "fa-circle-exclamation text-rose-500");
+                });
+            } else {
+                showToast("Geolocalización no soportada", "fa-xmark");
+            }
+        };
+
+        window.clearSearch = function() {
+            document.getElementById('search-input').value = '';
+            renderClients();
+        };
+
+        function showToast(msg, iconClass = "fa-circle-check") {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-msg').innerText = msg;
+            document.getElementById('toast-icon').className = `fa-solid ${iconClass}`;
+            toast.classList.remove('hidden');
+            setTimeout(() => {
+                toast.classList.add('hidden');
+            }, 3000);
+        }
+
+        // Inicialización
+        initAuth();
+    </script>
+</body>
+</html>
